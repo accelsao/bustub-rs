@@ -1,6 +1,8 @@
-pub trait Replace {
-    fn victim(&mut self) -> Option<u32>;
-    fn pin(&mut self, frame_id: u32);
-    fn unpin(&mut self, frame_id: u32);
+use crate::FrameId;
+
+pub trait Replacer {
+    fn victim(&mut self) -> Option<FrameId>;
+    fn pin(&mut self, frame_id: FrameId);
+    fn unpin(&mut self, frame_id: FrameId);
     fn size(&self) -> usize;
 }

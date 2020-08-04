@@ -1,14 +1,15 @@
 use crate::errors::Result;
-use crate::{PageId, PAGE_SIZE};
+use crate::{AtomicPageId, PageId, PAGE_SIZE};
 use slog::Logger;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
+use std::sync::atomic::Ordering;
 
 // DiskManager takes care of the allocation and deallocation of pages within a database. It performs the reading and
 // writing of pages to and from disk, providing a logical file layer within the context of a database management system.
 pub struct DiskManager {
     // filename: String,
-    // next_page_id: AtomicU32,
+    next_page_id: AtomicPageId,
     num_writes: u32,
     // num_flushes: u32,
     db_file: File,
@@ -37,6 +38,7 @@ impl DiskManager {
                 .open(filename)?;
 
             Ok(Self {
+                next_page_id: AtomicPageId::new(0),
                 num_writes: 0,
                 db_file,
                 log_file,
@@ -49,10 +51,10 @@ impl DiskManager {
 
     // Write the contents of the specified page into disk file
     pub fn write_page(&mut self, page_id: PageId, page_data: &[u8]) -> Result<()> {
-        let offset = page_id * PAGE_SIZE as u64;
+        let offset = page_id as u64 * PAGE_SIZE as u64;
         self.num_writes += 1;
         debug!(self.logger, "num_writes: {:?}", self.num_writes);
-        self.db_file.seek(SeekFrom::Start(offset as u64))?;
+        self.db_file.seek(SeekFrom::Start(offset))?;
         self.db_file.write_all(page_data)?;
         debug!(self.logger, "db_file flush");
         self.db_file.flush()?;
@@ -62,7 +64,7 @@ impl DiskManager {
 
     // Read the contents of the specified page into the given memory area
     pub fn read_page(&mut self, page_id: PageId, page_data: &mut [u8]) -> Result<()> {
-        let offset = page_id * PAGE_SIZE as u64;
+        let offset = page_id as u64 * PAGE_SIZE as u64;
 
         debug!(
             self.logger,
@@ -113,6 +115,11 @@ impl DiskManager {
             );
         }
         Ok(true)
+    }
+
+    pub fn allocate_page(&mut self) -> PageId {
+        self.next_page_id.fetch_add(1, Ordering::SeqCst);
+        self.next_page_id.load(Ordering::SeqCst)
     }
 }
 
