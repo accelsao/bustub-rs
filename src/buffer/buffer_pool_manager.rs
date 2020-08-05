@@ -3,14 +3,12 @@ use crate::buffer::replace::Replacer;
 use crate::errors::Result;
 use crate::storage::disk::disk_manager::DiskManager;
 use crate::storage::page::Page;
-use crate::{FrameId, PageId, INVALID_PAGE_ID};
+use crate::{FrameId, PageId, INVALID_PAGE_ID, PAGE_SIZE};
 use slog::Logger;
 use std::collections::{HashMap, LinkedList};
 
 pub struct BufferPoolManager {
-    // Number of pages in the buffer pool
-    pool_size: usize,
-    // Array of buffer pool pages.
+    // Mapping of frame to buffer pool pages.
     pages: HashMap<FrameId, Page>,
     // Page table for keeping track of buffer pool pages
     page_table: HashMap<PageId, FrameId>,
@@ -30,7 +28,6 @@ impl BufferPoolManager {
         }
 
         Self {
-            pool_size,
             pages: HashMap::new(),
             page_table: Default::default(),
             replacer: ClockReplacer::new(pool_size),
@@ -53,6 +50,12 @@ impl BufferPoolManager {
                     .write_page(page.get_id(), &page.get_data())?;
             }
             *page = Page::new(page_id);
+
+            // read page from disk
+            let mut buf = vec![0; PAGE_SIZE];
+            self.disk_manager.read_page(page_id, &mut buf)?;
+            page.put_data(&buf);
+
             self.page_table.insert(page_id, frame_id);
             Ok(Some(page))
         } else {
@@ -60,7 +63,19 @@ impl BufferPoolManager {
         }
     }
 
-    pub fn fetch_page(&self, page_id)
+    pub fn flush_page(&mut self, page_id: PageId) -> Result<bool> {
+        if let Some(frame_id) = self.page_table.get(&page_id) {
+            if let Some(page) = self.pages.get(frame_id) {
+                self.disk_manager
+                    .write_page(page.get_id(), &page.get_data())?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        } else {
+            Ok(false)
+        }
+    }
 
     pub fn unpin_page(&mut self, page_id: PageId, is_dirty: bool) -> bool {
         let frame_id = self
@@ -73,14 +88,17 @@ impl BufferPoolManager {
 
         self.replacer.unpin(*frame_id);
 
+        // delete from page table
+        self.page_table.remove(&page_id);
+
         page.get_pin_count() > 0
     }
     pub fn new_page(&mut self) -> (Option<&mut Page>, PageId) {
-        let page_id = self.disk_manager.allocate_page();
-
-        debug!(self.logger, "page_id: {:?}", page_id);
-
         if let Some(frame_id) = self.find_replacement() {
+            let page_id = self.disk_manager.allocate_page();
+
+            debug!(self.logger, "page_id: {:?}", page_id);
+
             let page = Page::new(page_id);
 
             self.page_table.insert(page_id, frame_id);
@@ -113,8 +131,7 @@ mod tests {
     use crate::storage::disk::disk_manager::DiskManager;
     use crate::{default_logger, PageId, INVALID_PAGE_ID, PAGE_SIZE};
     use rand::prelude::StdRng;
-    use rand::{Rng, RngCore, SeedableRng};
-    use std::borrow::BorrowMut;
+    use rand::{RngCore};
 
     const DB_NAME: &str = "target/test.db";
     const BUFFER_POOL_SIZE: usize = 10;
@@ -146,7 +163,7 @@ mod tests {
             assert_eq!(page_id, i as PageId);
         }
 
-        for _ in BUFFER_POOL_SIZE + 1..BUFFER_POOL_SIZE * 2 {
+        for _ in BUFFER_POOL_SIZE + 1..=BUFFER_POOL_SIZE * 2 {
             let (page, page_id) = bpm.new_page();
             assert!(page.is_none());
             assert_eq!(page_id, INVALID_PAGE_ID);
@@ -154,7 +171,19 @@ mod tests {
 
         for i in 1..=5 {
             assert!(bpm.unpin_page(i, true));
+            bpm.flush_page(i)?;
         }
+
+        for _ in 1..=5 {
+            let (page, page_id) = bpm.new_page();
+            assert!(page.is_some());
+            bpm.unpin_page(page_id, false);
+        }
+
+        let page = bpm.fetch_page(1)?.unwrap();
+        assert_eq!(page.get_data(), random_binary_data.to_vec());
+
+        assert!(bpm.unpin_page(1, true));
 
         Ok(())
     }
