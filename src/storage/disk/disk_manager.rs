@@ -56,9 +56,7 @@ impl DiskManager {
         debug!(self.logger, "num_writes: {:?}", self.num_writes);
         self.db_file.seek(SeekFrom::Start(offset))?;
         self.db_file.write_all(page_data)?;
-        debug!(self.logger, "db_file flush");
         self.db_file.flush()?;
-        debug!(self.logger, "db_file flush");
         Ok(())
     }
 
@@ -68,8 +66,9 @@ impl DiskManager {
 
         debug!(
             self.logger,
-            "{:?}",
-            (offset, self.db_file.metadata()?.len())
+            "offset: {}, file_len: {}",
+            offset,
+            self.db_file.metadata()?.len()
         );
 
         if offset > self.db_file.metadata()?.len() {
@@ -128,6 +127,7 @@ mod tests {
     use crate::disk_manager::DiskManager;
     use crate::errors::Result;
     use crate::{default_logger, PAGE_SIZE};
+    use std::fs::remove_file;
 
     #[test]
     fn read_write_page_test() -> Result<()> {
@@ -136,7 +136,7 @@ mod tests {
         let mut buf = vec![0u8; PAGE_SIZE];
         let mut data = vec![0u8; PAGE_SIZE];
 
-        let filename = "target/test.db";
+        let filename = "target/test_read_write_page.db";
 
         let mut dm = DiskManager::new(filename, &logger)?;
 
@@ -161,6 +161,8 @@ mod tests {
 
         assert_eq!(data, buf);
 
+        remove_file(filename)?;
+
         Ok(())
     }
 
@@ -171,7 +173,7 @@ mod tests {
         let mut buf = vec![0u8; 16];
         let mut data = vec![0u8; 16];
 
-        let filename = "target/test.db";
+        let filename = "target/test_read_write_log.db";
 
         let mut dm = DiskManager::new(filename, &logger)?;
 
@@ -186,6 +188,8 @@ mod tests {
         dm.read_log(&mut buf, 0u64)?;
 
         assert_eq!(data, buf);
+
+        remove_file(filename)?;
 
         Ok(())
     }

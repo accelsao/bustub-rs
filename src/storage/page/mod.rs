@@ -37,6 +37,9 @@ impl Page {
     pub fn mark_dirty(&mut self, dirty: bool) {
         self.is_dirty = dirty;
     }
+    pub fn pin(&mut self) {
+        self.pin_count += 1;
+    }
 }
 
 impl Default for Page {

@@ -37,13 +37,32 @@ impl BufferPoolManager {
         }
     }
     pub fn fetch_page(&mut self, page_id: PageId) -> Result<Option<&mut Page>> {
-        if let Some(frame_id) = self.page_table.get(&page_id) {
-            Ok(self.pages.get_mut(frame_id))
-        } else if let Some(frame_id) = self.find_replacement() {
+        let frame_id = self
+            .page_table
+            .get(&page_id)
+            .unwrap_or_else(|| panic!("Page{} is not exists.", page_id));
+        {
             let page = self
                 .pages
                 .get_mut(&frame_id)
-                .unwrap_or_else(|| panic!("page from frame_id: {} must exists", frame_id));
+                .unwrap_or_else(|| panic!("page from frame{} must exists", frame_id));
+            if page.get_id() == page_id {
+                page.pin();
+                self.replacer.pin(*frame_id);
+                return Ok(self.pages.get_mut(&frame_id));
+            }
+        }
+
+        // find Replacement, update new page that read from disk.
+        if let Some(frame_id) = self.find_replacement() {
+            debug!(
+                self.logger,
+                "new mapping, page({}) -> frame({})", page_id, frame_id
+            );
+            let page = self
+                .pages
+                .get_mut(&frame_id)
+                .unwrap_or_else(|| panic!("page from frame{} must exists", frame_id));
             if page.is_dirty() {
                 // write to disk
                 self.disk_manager
@@ -57,10 +76,10 @@ impl BufferPoolManager {
             page.put_data(&buf);
 
             self.page_table.insert(page_id, frame_id);
-            Ok(Some(page))
-        } else {
-            Ok(None)
+            return Ok(self.pages.get_mut(&frame_id));
         }
+
+        Ok(None)
     }
 
     pub fn flush_page(&mut self, page_id: PageId) -> Result<bool> {
@@ -68,6 +87,7 @@ impl BufferPoolManager {
             if let Some(page) = self.pages.get(frame_id) {
                 self.disk_manager
                     .write_page(page.get_id(), &page.get_data())?;
+                debug!(self.logger, "page{} write to disk", page_id);
                 Ok(true)
             } else {
                 Ok(false)
@@ -88,26 +108,30 @@ impl BufferPoolManager {
 
         self.replacer.unpin(*frame_id);
 
-        // delete from page table
-        self.page_table.remove(&page_id);
-
         page.get_pin_count() > 0
     }
-    pub fn new_page(&mut self) -> (Option<&mut Page>, PageId) {
+    pub fn new_page(&mut self) -> Result<(Option<&mut Page>, PageId)> {
         if let Some(frame_id) = self.find_replacement() {
             let page_id = self.disk_manager.allocate_page();
 
             debug!(self.logger, "page_id: {:?}", page_id);
 
-            let page = Page::new(page_id);
+            let new_page = Page::new(page_id);
 
             self.page_table.insert(page_id, frame_id);
 
-            self.pages.insert(frame_id, page);
+            if let Some(old_page) = self.pages.get_mut(&frame_id) {
+                if old_page.is_dirty() {
+                    self.disk_manager
+                        .write_page(old_page.get_id(), &old_page.get_data())?;
+                }
+            }
 
-            (self.pages.get_mut(&frame_id), page_id)
+            self.pages.insert(frame_id, new_page);
+
+            Ok((self.pages.get_mut(&frame_id), page_id))
         } else {
-            (None, INVALID_PAGE_ID)
+            Ok((None, INVALID_PAGE_ID))
         }
     }
 
@@ -131,18 +155,21 @@ mod tests {
     use crate::storage::disk::disk_manager::DiskManager;
     use crate::{default_logger, PageId, INVALID_PAGE_ID, PAGE_SIZE};
     use rand::prelude::StdRng;
-    use rand::{RngCore};
+    use rand::RngCore;
+    use std::fs::remove_file;
 
-    const DB_NAME: &str = "target/test.db";
     const BUFFER_POOL_SIZE: usize = 10;
 
     #[test]
     fn test_buffer_pool_manager() -> Result<()> {
         let logger = default_logger();
-        let disk_manager = DiskManager::new(DB_NAME, &logger)?;
+
+        let filename = "target/test_buffer_pool_manager.db";
+
+        let disk_manager = DiskManager::new(filename, &logger)?;
         let mut bpm = BufferPoolManager::new(BUFFER_POOL_SIZE, disk_manager, &logger);
 
-        let (page1, page1_id) = bpm.new_page();
+        let (page1, page1_id) = bpm.new_page()?;
 
         assert!(page1.is_some());
         assert_eq!(page1_id, 1);
@@ -158,13 +185,13 @@ mod tests {
         assert_eq!(page1.get_data(), random_binary_data.to_vec());
 
         for i in 2..=BUFFER_POOL_SIZE {
-            let (page, page_id) = bpm.new_page();
+            let (page, page_id) = bpm.new_page()?;
             assert!(page.is_some());
             assert_eq!(page_id, i as PageId);
         }
 
         for _ in BUFFER_POOL_SIZE + 1..=BUFFER_POOL_SIZE * 2 {
-            let (page, page_id) = bpm.new_page();
+            let (page, page_id) = bpm.new_page()?;
             assert!(page.is_none());
             assert_eq!(page_id, INVALID_PAGE_ID);
         }
@@ -175,7 +202,7 @@ mod tests {
         }
 
         for _ in 1..=5 {
-            let (page, page_id) = bpm.new_page();
+            let (page, page_id) = bpm.new_page()?;
             assert!(page.is_some());
             bpm.unpin_page(page_id, false);
         }
@@ -184,6 +211,8 @@ mod tests {
         assert_eq!(page.get_data(), random_binary_data.to_vec());
 
         assert!(bpm.unpin_page(1, true));
+
+        remove_file(filename)?;
 
         Ok(())
     }
