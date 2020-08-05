@@ -8,7 +8,11 @@ extern crate slog;
 extern crate slog_async;
 extern crate slog_term;
 
+pub use self::buffer::buffer_pool_manager::BufferPoolManager;
+pub use self::buffer::clock_replacer::ClockReplacer;
 pub use self::storage::disk::disk_manager;
+pub use self::storage::page::Page;
+use std::sync::atomic::AtomicU32;
 
 pub mod errors {
     pub use anyhow::Error;
@@ -25,5 +29,9 @@ pub fn default_logger() -> slog::Logger {
 }
 
 const PAGE_SIZE: usize = 4096;
+const INVALID_PAGE_ID: PageId = 0;
 
-type PageId = u64;
+type FrameId = u32;
+type PageId = u32;
+type AtomicPageId = AtomicU32;
+type EpochId = u64;

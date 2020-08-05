@@ -1,26 +1,30 @@
-use crate::buffer::replace::Replace;
+use crate::buffer::replace::Replacer;
+use crate::{EpochId, FrameId};
 use std::collections::{HashMap, VecDeque};
 
 pub struct ClockReplacer {
-    queue: VecDeque<(u32, u32)>,
-    recorder: HashMap<u32, u32>,
-    xid: u32,
+    // replacer queue
+    queue: VecDeque<(FrameId, EpochId)>,
+    // record the latest epoch id for frame id
+    recorder: HashMap<FrameId, EpochId>,
+    // TODO(accelsao): what if epoch id is over u64?
+    // global epoch id
+    epoch_id: EpochId,
 }
 
 impl ClockReplacer {
-    // TODO(accelsao): remove when used
-    #[allow(dead_code)]
     pub fn new(num_pages: usize) -> Self {
         Self {
             queue: VecDeque::with_capacity(num_pages),
             recorder: HashMap::new(),
-            xid: 0,
+            epoch_id: 0,
         }
     }
 }
 
-impl Replace for ClockReplacer {
-    fn victim(&mut self) -> Option<u32> {
+impl Replacer for ClockReplacer {
+    // return the first frame in replacer that xid equal to the frame's latest xid
+    fn victim(&mut self) -> Option<FrameId> {
         loop {
             if let Some((frame_id, xid)) = self.queue.pop_front() {
                 if self.recorder.get(&frame_id) == Some(&xid) {
@@ -33,17 +37,17 @@ impl Replace for ClockReplacer {
         }
     }
 
-    fn pin(&mut self, frame_id: u32) {
+    fn pin(&mut self, frame_id: FrameId) {
         if self.recorder.contains_key(&frame_id) {
             self.recorder.remove(&frame_id);
         }
     }
 
-    fn unpin(&mut self, frame_id: u32) {
-        self.recorder.entry(frame_id).or_insert(self.xid);
-        if self.recorder[&frame_id] == self.xid {
-            self.queue.push_back((frame_id, self.xid));
-            self.xid += 1;
+    fn unpin(&mut self, frame_id: FrameId) {
+        self.recorder.entry(frame_id).or_insert(self.epoch_id);
+        if self.recorder[&frame_id] == self.epoch_id {
+            self.queue.push_back((frame_id, self.epoch_id));
+            self.epoch_id += 1;
         }
     }
 
@@ -55,7 +59,7 @@ impl Replace for ClockReplacer {
 #[cfg(test)]
 mod tests {
     use crate::buffer::clock_replacer::ClockReplacer;
-    use crate::buffer::replace::Replace;
+    use crate::buffer::replace::Replacer;
 
     #[test]
     fn test_clock_replacer() {
