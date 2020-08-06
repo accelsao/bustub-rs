@@ -1,5 +1,10 @@
+pub mod hash_table_header_page;
 mod table_page;
 
+#[cfg(test)]
+mod hash_table_header_page_test;
+
+// Page Impl
 use crate::{PageId, INVALID_PAGE_ID, PAGE_SIZE};
 
 #[derive(Copy, Clone)]
@@ -19,10 +24,10 @@ impl Page {
             is_dirty: false,
         }
     }
-    pub fn get_data(&self) -> Vec<u8> {
-        self.data.to_vec()
+    pub fn get_data(&self) -> [u8; PAGE_SIZE] {
+        self.data
     }
-    pub fn put_data(&mut self, data: &[u8]) {
+    pub fn set_data(&mut self, data: &[u8; PAGE_SIZE]) {
         self.data.copy_from_slice(data)
     }
     pub fn get_id(&self) -> PageId {
